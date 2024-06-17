@@ -30,7 +30,7 @@ def remove_outof_fov(gs, fov, tcw, Rcw):
     # temporary solution
     # FIXME: 
     pc = (Rcw @ pws.T).T + tcw
-    valid_inds = pc[:, 2] > 0
+    valid_inds = pc[:, 2] > 0.2
 
     keys = ['pw', 'scale', 'sh', 'rot', 'alpha']
     new_gs = {}
@@ -54,8 +54,8 @@ if __name__ == "__main__":
         gs = get_example_gs()
 
     # Camera info
-    tcw = np.array([1.03796196, 0.42017467, 4.67804612])
-    # tcw = np.array([0.53796196, 0.42017467, 2.67804612])
+    # tcw = np.array([1.03796196, 0.42017467, 4.67804612])
+    tcw = np.array([1.03796196, 0.42017467, 3.67804612])
     Rcw = np.array([[0.89699204,  0.06525223,  0.43720409],
                     [-0.04508268,  0.99739184, -0.05636552],
                     [-0.43974177,  0.03084909,  0.89759429]]).T
@@ -63,8 +63,8 @@ if __name__ == "__main__":
     width = int(1280)
     height = int(1280)
 
-    # hfov = np.pi * 0.8
-    hfov = np.pi * 0.3
+    hfov = np.pi * 0.8
+    # hfov = np.pi * 0.3
 
     tanx = np.tan(hfov / 2)
     tany = tanx

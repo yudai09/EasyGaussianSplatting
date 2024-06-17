@@ -136,14 +136,12 @@ def compute_cov_2d(pc, fx, fy, tan_fovx, tan_fovy, cov3d, Rcw):
     # tan_fovx = 2 * np.arctan(width/(2*fx))
     # tan_fovy = 2 * np.arctan(height/(2*fy))
 
-    limx = 1.3 * tan_fovx
-    limy = 1.3 * tan_fovy
-    x = np.clip(x / z, -limx, limx) * z
-    y = np.clip(y / z, -limy, limy) * z
+    # limx = 1.3 * tan_fovx
+    # limy = 1.3 * tan_fovy
+    # x = np.clip(x / z, -limx, limx) * z
+    # y = np.clip(y / z, -limy, limy) * z
 
     # Fisheye Equidistant model. ref. https://wiki.panotools.org/Fisheye_Projection
-    xz = x / z
-    yz = y / z
     eps = 0.000001
     x2 = x * x + eps
     y2 = y * y
@@ -152,8 +150,8 @@ def compute_cov_2d(pc, fx, fy, tan_fovx, tan_fovy, cov3d, Rcw):
     len_xy = np.sqrt(x2 + y2) + eps
     x2y2z2_inv = 1.0 / (x2y2 + z * z)
 
-    g = np.arctan(len_xy / - z) / len_xy / x2y2
-    h = z * x2y2z2_inv / (x2y2)
+    h = np.arctan(len_xy / - z) / len_xy / x2y2
+    g = z * x2y2z2_inv / (x2y2)
 
     J = np.zeros([pc.shape[0], 3, 3])
     J[:, 0, 0] = fx * (x2 * g - y2 * h)
@@ -178,6 +176,9 @@ def compute_cov_2d(pc, fx, fy, tan_fovx, tan_fovy, cov3d, Rcw):
     Sigma_prime = T @ Sigma @ T.transpose(0, 2, 1)
     Sigma_prime[:, 0, 0] += 0.3
     Sigma_prime[:, 1, 1] += 0.3
+    # Sigma_prime[:, 0, 0] = np.clip(Sigma_prime[:, 0, 0], -1.0, 1.0)
+    # Sigma_prime[:, 1, 1] = np.clip(Sigma_prime[:, 1, 1], -1.0, 1.0)
+    # Sigma_prime[:, 0, 1] = np.clip(Sigma_prime[:, 0, 1], -1.0, 1.0)
 
     cov2d = upper_triangular(Sigma_prime[:, :2, :2])
     # cov2d[out_idx] = 0
