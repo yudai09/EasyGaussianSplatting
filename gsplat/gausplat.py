@@ -128,25 +128,48 @@ def compute_cov_3d(scale, rot):
     return cov3d
 
 
-def compute_cov_2d(pc, fx, fy, width, height, cov3d, Rcw):
+def compute_cov_2d(pc, fx, fy, tan_fovx, tan_fovy, cov3d, Rcw):
     x = pc[:, 0]
     y = pc[:, 1]
     z = pc[:, 2]
 
-    tan_fovx = 2 * np.arctan(width/(2*fx))
-    tan_fovy = 2 * np.arctan(height/(2*fy))
+    # tan_fovx = 2 * np.arctan(width/(2*fx))
+    # tan_fovy = 2 * np.arctan(height/(2*fy))
 
     limx = 1.3 * tan_fovx
     limy = 1.3 * tan_fovy
     x = np.clip(x / z, -limx, limx) * z
     y = np.clip(y / z, -limy, limy) * z
 
+    # Fisheye Equidistant model. ref. https://wiki.panotools.org/Fisheye_Projection
+    xz = x / z
+    yz = y / z
+    eps = 0.000001
+    x2 = x * x + eps
+    y2 = y * y
+    xy = x * y
+    x2y2 = x2 + y2
+    len_xy = np.sqrt(x2 + y2) + eps
+    x2y2z2_inv = 1.0 / (x2y2 + z * z)
+
+    g = np.arctan(len_xy / - z) / len_xy / x2y2
+    h = z * x2y2z2_inv / (x2y2)
+
     J = np.zeros([pc.shape[0], 3, 3])
-    z2 = z * z
-    J[:, 0, 0] = fx / z
-    J[:, 0, 2] = -(fx * x) / z2
-    J[:, 1, 1] = fy / z
-    J[:, 1, 2] = -(fy * y) / z2
+    J[:, 0, 0] = fx * (x2 * g - y2 * h)
+    J[:, 0, 1] = fx * xy * (g + h)
+    J[:, 0, 2] = - fx * x * x2y2z2_inv
+    J[:, 1, 0] = fy * xy  * (g + h)
+    J[:, 1, 1] = fy * (y2 * g - x2 * h)
+    J[:, 1, 2] = - fy * y * x2y2z2_inv
+
+    # Pinhole
+    # J = np.zeros([pc.shape[0], 3, 3])
+    # z2 = z * z
+    # J[:, 0, 0] = fx / z
+    # J[:, 0, 2] = -(fx * x) / z2
+    # J[:, 1, 1] = fy / z
+    # J[:, 1, 2] = -(fy * y) / z2
 
     T = J @ Rcw
 
@@ -168,9 +191,20 @@ def project(pw, Rcw, tcw, fx, fy, cx, cy):
     x = pc[:, 0]
     y = pc[:, 1]
     z = pc[:, 2]
-    u = np.stack([(x * fx / z + cx),
-                  (y * fy / z + cy)], axis=1)
-    return u, pc
+
+    r = np.sqrt(x * x + y * y) + 1e-6
+    # insident angle
+    theta = np.arctan2(r, z)
+
+    # ignore fy
+    rd = fx * theta
+
+    u = rd * x / r + cx
+    v = rd * y / r + cy
+
+    uv = np.stack([u, v], axis=1)
+
+    return uv, pc
 
 
 def inverse_cov2d(cov2d):
