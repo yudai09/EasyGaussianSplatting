@@ -451,24 +451,13 @@ __global__ void computeCov2D(
     const float e = cov3ds[i * 6 + 4];
     const float f = cov3ds[i * 6 + 5];
 
-    // const float limx = 1.3f * tan_fovx;
-    // const float limy = 1.3f * tan_fovy;
-    // x = min(limx, max(-limx, x / z)) * z;
-    // y = min(limy, max(-limy, y / z)) * z;
-
     Matrix<3, 3> R = {
         Rcw[0], Rcw[1], Rcw[2],
         Rcw[3], Rcw[4], Rcw[5],
         Rcw[6], Rcw[7], Rcw[8]};
 
-    // For Pinhole
-    // float z2 = z * z;
-    // Matrix<2, 3> J = {
-    //     focal_x / z, 0.0f, -(focal_x * x) / z2,
-    //     0.0f, focal_y / z, -(focal_y * y) / z2};
-
     // Fisheye Equidistant model. ref. https://wiki.panotools.org/Fisheye_Projection
-	const float eps = 0.01f;
+	const float eps = 0.000001f;
 	const float x2 = x * x + eps;
 	const float y2 = y * y;
 	const float xy = x * y;
@@ -486,7 +475,7 @@ __global__ void computeCov2D(
         focal_y * xy  * (g + h),
         focal_y * (y2 * g - x2 * h),
         - focal_y * y * x2y2z2_inv,
-    };    
+    };
 
     Matrix<3, 3> Sigma = {
         a, b, c,
@@ -540,14 +529,32 @@ __global__ void computeCov2D(
                                   2 * b * M(1, 0) + 2 * d * M(1, 1) + 2 * e * M(1, 2),
                                   2 * c * M(1, 0) + 2 * e * M(1, 1) + 2 * f * M(1, 2)};
 
-        const float z2_inv = 1.f / (z * z);
-        const float z3_inv = z2_inv / z;
-        Matrix<6, 3> dm_dpc = {-focal_x * R(2, 0) * z2_inv, 0, -focal_x * R(0, 0) * z2_inv + 2 * focal_x * R(2, 0) * x * z3_inv,
-                               -focal_x * R(2, 1) * z2_inv, 0, -focal_x * R(0, 1) * z2_inv + 2 * focal_x * R(2, 1) * x * z3_inv,
-                               -focal_x * R(2, 2) * z2_inv, 0, -focal_x * R(0, 2) * z2_inv + 2 * focal_x * R(2, 2) * x * z3_inv,
-                               0, -focal_y * R(2, 0) * z2_inv, -focal_y * R(1, 0) * z2_inv + 2 * focal_y * R(2, 0) * y * z3_inv,
-                               0, -focal_y * R(2, 1) * z2_inv, -focal_y * R(1, 1) * z2_inv + 2 * focal_y * R(2, 1) * y * z3_inv,
-                               0, -focal_y * R(2, 2) * z2_inv, -focal_y * R(1, 2) * z2_inv + 2 * focal_y * R(2, 2) * y * z3_inv};
+
+        const float lz = sqrt(x * x + y * y);
+        const float z2 = z * z;
+        const float l2 = x2 + y2 + z2;
+        const float l22 = l2 * l2;
+        const float lz2 = lz * lz;
+        const float lz3 = lz2 * lz;
+        const float lz5 = lz2 * lz3;
+        const float theta = atan2(lz, z);
+
+        const float S5 = x2 - y2 - z2;
+        const float S6 = y2 - x2 - z2;
+        const float S7 = - l22 * lz2 * theta + l2  * lz3 * z;
+        const float S8 = 3 * l22 * theta - 3 * l2 * lz * z - 2 * lz3 * z;
+        const float S1 = x * (3 * S7 + x2 * S8);
+        const float S2 = y * (S7 + x2 * S8);
+        const float S3 = x * (S7 + y2 * S8);
+        const float S4 = y * (3 * S7 + y2 * S8);
+
+        Matrix<6, 3> dm_dpc = {
+            focal_x * S1 / (l22 * lz5), focal_x * S2 / (l22 * lz5), focal_x * S5 / l22,
+            focal_x * S2 / (l22 * lz5), focal_x * S3 / (l22 * lz5), 2 * focal_x * x * y / l22,
+            focal_x * S5 / l22,         2 * focal_y * x * y / l22,  2 * focal_x * x * z / l22,
+            focal_y * S2 / (l22 * lz5), focal_y * S3 / (l22 * lz5), 2 * focal_y * x * y / l22,
+            focal_y * S3 / (l22 * lz5), focal_y * S4 / (l22 * lz5), focal_y * S6 / l22,
+            2 * focal_y * x * y / l22,  focal_y * S6 / l22,         2 * focal_y * y * z / l22};
 
         // backward.pdf (B.3b)
         Matrix<3, 3> dcov2d_dpc = dcov2d_dm * dm_dpc;
@@ -617,15 +624,28 @@ __global__ void project(
     // depths[i] = z;
     depths[i] = sqrt(x*x + y*y + z*z);
 
-    // TODO: implement for backward
-    // if (du_dpcs != nullptr)
-    // {
-    //     // backward.pdf (B.1.2)
-    //     du_dpcs[i * 6 + 0] = focal_x * z_inv;
-    //     du_dpcs[i * 6 + 2] = -x_focal_x * z2_inv;
-    //     du_dpcs[i * 6 + 4] = focal_y * z_inv;
-    //     du_dpcs[i * 6 + 5] = -y_focal_y * z2_inv;
-    // }
+    if (du_dpcs != nullptr)
+    {
+        // Fisheye Equidistant model. ref. https://wiki.panotools.org/Fisheye_Projection
+        const float eps = 0.000001f;
+        const float x2 = x * x + eps;
+        const float y2 = y * y;
+        const float xy = x * y;
+        const float x2y2 = x2 + y2;
+        const float len_xy = sqrt(x2 + y2) + eps;
+        const float x2y2z2_inv = 1.f / (x2y2 + z * z);
+
+        const float h = atan(len_xy / - z) / len_xy / x2y2;
+        const float g = z * x2y2z2_inv / (x2y2);
+
+        // backward.pdf (B.1.2)
+        du_dpcs[i * 6 + 0] = focal_x * (x2 * g - y2 * h);
+        du_dpcs[i * 6 + 1] = focal_x * xy * (g + h);
+        du_dpcs[i * 6 + 2] = - focal_x * x * x2y2z2_inv;
+        du_dpcs[i * 6 + 3] = focal_y * xy  * (g + h);
+        du_dpcs[i * 6 + 4] = focal_y * (y2 * g - x2 * h);
+        du_dpcs[i * 6 + 5] = - focal_y * y * x2y2z2_inv;        
+    }
 }
 
 __global__ void sh2Color(
