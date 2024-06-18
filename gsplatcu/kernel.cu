@@ -451,22 +451,42 @@ __global__ void computeCov2D(
     const float e = cov3ds[i * 6 + 4];
     const float f = cov3ds[i * 6 + 5];
 
-    const float limx = 1.3f * tan_fovx;
-    const float limy = 1.3f * tan_fovy;
-    x = min(limx, max(-limx, x / z)) * z;
-    y = min(limy, max(-limy, y / z)) * z;
-
-
-    float z2 = z * z;
+    // const float limx = 1.3f * tan_fovx;
+    // const float limy = 1.3f * tan_fovy;
+    // x = min(limx, max(-limx, x / z)) * z;
+    // y = min(limy, max(-limy, y / z)) * z;
 
     Matrix<3, 3> R = {
         Rcw[0], Rcw[1], Rcw[2],
         Rcw[3], Rcw[4], Rcw[5],
         Rcw[6], Rcw[7], Rcw[8]};
 
+    // For Pinhole
+    // float z2 = z * z;
+    // Matrix<2, 3> J = {
+    //     focal_x / z, 0.0f, -(focal_x * x) / z2,
+    //     0.0f, focal_y / z, -(focal_y * y) / z2};
+
+    // Fisheye Equidistant model. ref. https://wiki.panotools.org/Fisheye_Projection
+	const float eps = 0.01f;
+	const float x2 = x * x + eps;
+	const float y2 = y * y;
+	const float xy = x * y;
+	const float x2y2 = x2 + y2;
+	const float len_xy = sqrt(x2 + y2) + eps;
+	const float x2y2z2_inv = 1.f / (x2y2 + z * z);
+
+	const float h = atan(len_xy / - z) / len_xy / x2y2;
+	const float g = z * x2y2z2_inv / (x2y2);
+
     Matrix<2, 3> J = {
-        focal_x / z, 0.0f, -(focal_x * x) / z2,
-        0.0f, focal_y / z, -(focal_y * y) / z2};
+        focal_x * (x2 * g - y2 * h),
+        focal_x * xy * (g + h),
+        - focal_x * x * x2y2z2_inv,
+        focal_y * xy  * (g + h),
+        focal_y * (y2 * g - x2 * h),
+        - focal_y * y * x2y2z2_inv,
+    };    
 
     Matrix<3, 3> Sigma = {
         a, b, c,
@@ -580,29 +600,32 @@ __global__ void project(
     const float x = pc(0);
     const float y = pc(1);
     const float z = pc(2);
-    const float z_inv = 1.f / z;
-    const float z2_inv = z_inv / z;
 
-    const float x_focal_x = x * focal_x;
-    const float y_focal_y = y * focal_y;
+    const float r = sqrt(x * x + y * y);
+    // insident angle
+    const float theta = atan2(r, z);
+    // ignore fy
+    const float rd = focal_x * theta;
 
     // forward.pdf (F.1.2)
-    const float u0 = x_focal_x * z_inv + center_x;
-    const float u1 = y_focal_y * z_inv + center_y;
+    const float u0 = rd * x / r + center_x;
+    const float u1 = rd * y / r + center_y;
 
     // make sure the cov2d is not too small.
     us[i] = {u0, u1};
     pcs[i] = {x, y, z};
-    depths[i] = z;
+    // depths[i] = z;
+    depths[i] = sqrt(x*x + y*y + z*z);
 
-    if (du_dpcs != nullptr)
-    {
-        // backward.pdf (B.1.2)
-        du_dpcs[i * 6 + 0] = focal_x * z_inv;
-        du_dpcs[i * 6 + 2] = -x_focal_x * z2_inv;
-        du_dpcs[i * 6 + 4] = focal_y * z_inv;
-        du_dpcs[i * 6 + 5] = -y_focal_y * z2_inv;
-    }
+    // TODO: implement for backward
+    // if (du_dpcs != nullptr)
+    // {
+    //     // backward.pdf (B.1.2)
+    //     du_dpcs[i * 6 + 0] = focal_x * z_inv;
+    //     du_dpcs[i * 6 + 2] = -x_focal_x * z2_inv;
+    //     du_dpcs[i * 6 + 4] = focal_y * z_inv;
+    //     du_dpcs[i * 6 + 5] = -y_focal_y * z2_inv;
+    // }
 }
 
 __global__ void sh2Color(
