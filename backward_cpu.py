@@ -76,15 +76,45 @@ def transform(pw, Rcw, tcw, calc_J=False):
 
 def project(pc, fx, fy, cx, cy, calc_J=False):
     x, y, z = pc
-    z_2 = z * z
-    u = np.array([(x * fx / z + cx),
-                  (y * fy / z + cy)])
+
+    r = np.sqrt(x * x + y * y) + 1e-6
+    # insident angle
+    theta = np.arctan2(r, z)
+
+    # ignore fy
+    rd = fx * theta
+
+    u = rd * x / r + cx
+    v = rd * y / r + cy
+
+    uv = np.array([u, v])
+
     if (calc_J is True):
-        du_dpc = np.array([[fx / z,    0, -fx * x / z_2],
-                           [0, fy / z, -fy * y / z_2]])
-        return u, du_dpc
-    else:
-        return u
+        # Fisheye Equidistant model. ref. https://wiki.panotools.org/Fisheye_Projection
+        eps = 0.000001
+        x2 = x * x + eps
+        y2 = y * y
+        xy = x * y
+        x2y2 = x2 + y2
+        len_xy = np.sqrt(x2 + y2) + eps
+        x2y2z2_inv = 1.0 / (x2y2 + z * z)
+
+        h = np.arctan(len_xy / - z) / len_xy / x2y2
+        g = z * x2y2z2_inv / (x2y2)
+
+        J = np.zeros([2, 3])
+        J[0, 0] = fx * (x2 * g - y2 * h)
+        J[0, 1] = fx * xy * (g + h)
+        J[0, 2] = - fx * x * x2y2z2_inv
+        J[1, 0] = fy * xy  * (g + h)
+        J[1, 1] = fy * (y2 * g - x2 * h)
+        J[1, 2] = - fy * y * x2y2z2_inv
+
+        du_dpc = J
+
+        return uv, du_dpc
+
+    return uv
 
 
 def calc_m(q, s, calc_J=False):
@@ -177,24 +207,78 @@ def compute_cov_2d(cov3d, pc, Rcw, fx, fy, calc_J=False):
                       [a*m10 + b*m11 + c*m12, b*m10 + d*m11 + e*m12, c*m10 + e*m11 + f*m12,
                           a*m00 + b*m01 + c*m02, b*m00 + d*m01 + e*m02, c*m00 + e*m01 + f*m02],
                       [0, 0, 0, 2*a*m10 + 2*b*m11 + 2*c*m12, 2*b*m10 + 2*d*m11 + 2*e*m12, 2*c*m10 + 2*e*m11 + 2*f*m12]])
-        dm_dpc =\
-            np.array([[-fx*r20/z**2, 0, -fx*r00/z**2 + 2*fx*r20*x/z**3],
-                      [-fx*r21/z**2, 0, -fx*r01/z**2 + 2*fx*r21*x/z**3],
-                      [-fx*r22/z**2, 0, -fx*r02/z**2 + 2*fx*r22*x/z**3],
-                      [0, -fy*r20/z**2, -fy*r10/z**2 + 2*fy*r20*y/z**3],
-                      [0, -fy*r21/z**2, -fy*r11/z**2 + 2*fy*r21*y/z**3],
-                      [0, -fy*r22/z**2, -fy*r12/z**2 + 2*fy*r22*y/z**3]])
+        dm_dpc = get_dm_dpc(fx, fy, x, y, z)
 
         return cov2d, dcov2d_dcov3d, dcov2d_dm @ dm_dpc
     else:
         return cov2d
 
 
+def get_dm_dpc(fx, fy, x, y, z):
+    lz = np.sqrt(x * x + y * y)
+
+    # insident angle
+    theta = np.arctan2(lz, z)
+
+    x2 = x * x
+    y2 = y * y
+    z2 = z * z
+    l2 = x2 + y2 + z2
+    l22 = l2 * l2    
+    lz2 = lz * lz
+    lz3 = lz2 * lz
+    lz5 = lz2 * lz3
+    # theta = None
+
+    S5 = x2 - y2 - z2
+    S6 = y2 - x2 - z2
+    S7 = - l22 * lz2 * theta + l2  * lz3 * z
+    S8 = 3 * l22 * theta - 3 * l2 * lz * z - 2 * lz3 * z
+    S1 = x * (3 * S7 + x2 * S8)
+    S2 = y * (S7 + x2 * S8)
+    S3 = x * (S7 + y2 * S8)
+    S4 = y * (3 * S7 + y2 * S8)
+
+    dm_dx = np.array(
+        [fx * S1 / (l22 * lz5), fx * S2 / (l22 * lz5), fx * S5 / l22,
+         fy * S2 / (l22 * lz5), fy * S3 / (l22 * lz5), 2 * fy * x * y / l22]
+    )
+    dm_dy = np.array(
+        [fx * S2 / (l22 * lz5), fx * S3 / (l22 * lz5), 2 * fy * x * y / l22,
+         fy * S3 / (l22 * lz5), fy * S4 / (l22 * lz5), fy * S6 / l22]
+    )
+    dm_dz = np.array(
+        [
+            fx * S5 / l22, 2 * fx * x * y / l22, 2 * fx * x * z / l22,
+            2 * fy * x * y / l22, fy * S6 / l22, 2 * fy * y * z / l22
+        ]
+    )
+    return np.stack([dm_dx, dm_dy, dm_dz]).T
+    
+
 def get_J(pc, fx, fy):
     x, y, z = pc
-    z2 = z*z
-    return np.array([[fx/z, 0, -fx*x/z2],
-                     [0, fy/z, -fy*y/z2]])
+    # Fisheye Equidistant model. ref. https://wiki.panotools.org/Fisheye_Projection
+    eps = 0.000001
+    x2 = x * x + eps
+    y2 = y * y
+    xy = x * y
+    x2y2 = x2 + y2
+    len_xy = np.sqrt(x2 + y2) + eps
+    x2y2z2_inv = 1.0 / (x2y2 + z * z)
+
+    h = np.arctan(len_xy / - (z + eps)) / len_xy / x2y2
+    g = z * x2y2z2_inv / (x2y2)
+
+    J = np.zeros([2, 3])
+    J[0, 0] = fx * (x2 * g - y2 * h)
+    J[0, 1] = fx * xy * (g + h)
+    J[0, 2] = - fx * x * x2y2z2_inv
+    J[1, 0] = fy * xy  * (g + h)
+    J[1, 1] = fy * (y2 * g - x2 * h)
+    J[1, 2] = - fy * y * x2y2z2_inv
+
+    return J
 
 
 def calc_cinv2d(cov2d, calc_J=False):
