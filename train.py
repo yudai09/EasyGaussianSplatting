@@ -9,6 +9,7 @@ from gsmodel import GSModel, logit
 from random import randint
 import time
 import gsplatcu as gsc
+import tqdm
 
 
 if __name__ == "__main__":
@@ -50,19 +51,22 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(l, lr=0.000, eps=1e-15)
 
+    mask = torch.tensor(cv2.imread("../data/kerare_mask.png", 1)).permute(2, 0, 1).to(torch.float32).to('cuda')
+    mask = torch.clip(mask, 0, 1)
+
     cam0, _ = gs_set[0]
     fig, ax = plt.subplots()
     array = np.zeros(shape=(cam0.height, cam0.width, 3), dtype=np.uint8)
     im = ax.imshow(array)
 
-    n_epochs = 100
+    n_epochs = 1000
     n = len(gs_set)
     # n = 1
     for epoch in range(n_epochs):
         idxs = np.arange(n)
         np.random.shuffle(idxs)
         avg_loss = 0
-        for i in idxs:
+        for ei, i in tqdm.tqdm(enumerate(idxs)):
             cam, image_gt = gs_set[i]
             # Limit the value of alphas: 0 < alphas < 1
             alphas = torch.sigmoid(alphas_raw)
@@ -80,14 +84,16 @@ if __name__ == "__main__":
                 cam,
             )
 
-            loss = gau_loss(image, image_gt)
+            loss = gau_loss(image, image_gt, mask=mask)
             loss.backward()
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             avg_loss += loss.item()
-            if (i == 0):
+            if (ei == 0):
                 im_cpu = image.to('cpu').detach().permute(1, 2, 0).numpy()
                 im_cpu = np.clip(im_cpu, 0, 1)
+                os.makedirs('debug/', exist_ok=True)
+                cv2.imwrite(f'debug/epoch_{epoch}_index_{i}.png', cv2.cvtColor((im_cpu * 255).astype(np.uint8), cv2.COLOR_RGB2BGR))
                 im.set_data(im_cpu)
                 fig.canvas.flush_events()
                 plt.pause(0.1)
