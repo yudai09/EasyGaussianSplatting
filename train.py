@@ -31,6 +31,9 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(adam_params, lr=0.000, eps=1e-15)
 
+    mask = torch.tensor(cv2.imread("../data/kerare_mask.png", 1)).permute(2, 0, 1).to(torch.float32).to('cuda')
+    mask = torch.clip(mask, 0, 1)
+
     cam0, _ = gs_set[0]
     fig, ax = plt.subplots()
     img = ax.imshow(
@@ -45,11 +48,11 @@ if __name__ == "__main__":
         idxs = np.arange(n)
         np.random.shuffle(idxs)
         avg_loss = 0
-        for i in idxs:
+        for ei, i in tqdm.tqdm(enumerate(idxs)):
             cam, image_gt = gs_set[i]
 
             image = model(*training_params.values(), cam)
-            loss = gau_loss(image, image_gt)
+            loss = gau_loss(image, image_gt, mask=mask)
             loss.backward()
 
             model.update_density_info()
