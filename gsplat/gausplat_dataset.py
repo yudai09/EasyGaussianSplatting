@@ -32,13 +32,40 @@ class Camera:
 class GSplatDataset(Dataset):
     def __init__(self, path, resize_rate=1, device='cuda') -> None:
         super().__init__()
-        self.path = path
         self.device = device
         self.resize_rate = resize_rate
 
         camera_params, image_params = read_model(Path(path, "sparse/0"), ext='.bin')
-        self.camera_params = camera_params
-        self.image_params = list(image_params.values())
+        self.cameras = []
+        self.images = []
+        for image_param in image_params.values():
+            i = image_param.camera_id
+            camera_param = camera_params[i]
+            im_path = str(Path(path, "images", image_param.name))
+            image = cv2.imread(im_path)
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # convert to equidistant fisheye image
+            image, camera_param = convert_to_equidistant_image(image, camera_param)
+
+            if (resize_rate != 1):
+                height, width = image.shape[0:2]
+                dest_size = (int(width * self.resize_rate), int(height * self.resize_rate))
+                image = cv2.resize(image, dest_size)
+
+            height, width = image.shape[0:2]
+            w_scale = width/camera_param.width
+            h_scale = height/camera_param.height
+            fx = camera_param.params[0] * w_scale
+            fy = camera_param.params[1] * h_scale
+            cx = camera_param.params[2] * w_scale
+            cy = camera_param.params[3] * h_scale
+            Rcw = torch.from_numpy(image_param.qvec2rotmat()).to(self.device).to(torch.float32)
+            tcw = torch.from_numpy(image_param.tvec).to(self.device).to(torch.float32)
+
+            camera = Camera(image_param.id, width, height, fx, fy, cx, cy, Rcw, tcw, im_path)
+
+            self.cameras.append(camera)
+            self.images.append(image)
         try:
             self.gs = np.load(Path(path, "sparse/0/points3D.npy"))
         except:
@@ -50,36 +77,13 @@ class GSplatDataset(Dataset):
         self.sence_size = float(torch.max(cam_dist)) * 1.1
 
     def __getitem__(self, index: int):
-        return self.get_camera_image(index)
-
-    def get_camera_image(self, index: int):
-        image_param = self.image_params[index]
-        i = image_param.camera_id
-        camera_param = self.camera_params[i]
-
-        # image = torchvision.io.read_image(
-        #     str(Path(self.path, "images", image_param.name))).to(self.device).to(torch.float32) / 255.
-        image = cv2.imread(str(Path(self.path, "images", image_param.name)))
-        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        # convert to equidistant fisheye image
-        image, camera_param = convert_to_equidistant_image(image, camera_param)
+        image = self.images[index]  # np.ndarray read by PIL
+        camera = self.cameras[index]
         image = torch.tensor(image).permute(2, 0, 1).to(torch.float32).to(self.device) / 255.
-
-        _, height, width = image.shape
-        w_scale = width/camera_param.width
-        h_scale = height/camera_param.height
-        fx = camera_param.params[0] * w_scale
-        fy = camera_param.params[1] * h_scale
-        cx = camera_param.params[2] * w_scale
-        cy = camera_param.params[3] * h_scale
-        Rcw = torch.from_numpy(image_param.qvec2rotmat()).to(self.device).to(torch.float32)
-        tcw = torch.from_numpy(image_param.tvec).to(self.device).to(torch.float32)
-        camera = Camera(image_param.id, width, height, fx, fy, cx, cy, Rcw, tcw)
-
         return camera, image
 
     def __len__(self) -> int:
-        return len(self.image_params)
+        return len(self.images)
 
 
 if __name__ == "__main__":

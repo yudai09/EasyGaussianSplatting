@@ -59,8 +59,9 @@ def ssim(img1, img2, window_size=11):
 
 
 def gau_loss(image, gt_image, mask=None, loss_lambda=0.2):
-    loss_l1 = torch.abs((image - gt_image) * mask).mean()
-    loss_ssim = 1.0 - (ssim(image, gt_image) * mask).mean()
+    loss_l1 = torch.abs((image - gt_image)[mask]).mean()
+    loss_l1 = torch.abs((image - gt_image)[mask]).mean()
+    loss_ssim = 1.0 - (ssim(image, gt_image)[mask]).mean()
 
     return (1.0 - loss_lambda) * loss_l1 + loss_lambda * loss_ssim
 

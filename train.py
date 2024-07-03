@@ -6,6 +6,7 @@ from gsplat.pytorch_ssim import gau_loss
 from gsplat.gau_io import *
 from gsplat.gausplat_dataset import *
 from gsplat.gsmodel import *
+import tqdm
 
 
 torch.autograd.set_detect_anomaly(True)
@@ -17,9 +18,10 @@ if __name__ == "__main__":
     parser.add_argument("--path", help="the path of dataset")
     args = parser.parse_args()
 
+    resize_rate = 1/2
     if args.path:
         print("Try to training %s ..." % args.path)
-        gs_set = GSplatDataset(args.path)
+        gs_set = GSplatDataset(args.path, resize_rate=resize_rate)
     else:
         print("not path of dataset.")
         exit(0)
@@ -31,8 +33,15 @@ if __name__ == "__main__":
 
     optimizer = optim.Adam(adam_params, lr=0.000, eps=1e-15)
 
-    mask = torch.tensor(cv2.imread("../data/kerare_mask.png", 1)).permute(2, 0, 1).to(torch.float32).to('cuda')
+    mask = cv2.imread("../data/living_fisheye5/kerare_mask_for_equidistant_image.png", 1)
+    if resize_rate != 1.0:
+        height, width = mask.shape[0:2]
+        dest_size = (int(width * resize_rate), int(height * resize_rate))
+        mask = cv2.resize(mask, dest_size)
+    mask = torch.tensor(mask).permute(2, 0, 1).to(torch.float32).to('cuda')
+
     mask = torch.clip(mask, 0, 1)
+    mask = mask == 1
 
     cam0, _ = gs_set[0]
     fig, ax = plt.subplots()
@@ -40,13 +49,14 @@ if __name__ == "__main__":
         np.zeros(shape=(cam0.height, cam0.width, 3), dtype=np.uint8))
     txt = ax.text(50, 50, "", size=20, color='white')
 
-    epochs = 100
+    epochs = 500
     n = len(gs_set)
     model = GSModel(gs_set.sence_size, len(gs_set) * epochs)
 
     for epoch in range(epochs):
         idxs = np.arange(n)
         np.random.shuffle(idxs)
+        idx_show = idxs[0]
         avg_loss = 0
         for ei, i in tqdm.tqdm(enumerate(idxs)):
             cam, image_gt = gs_set[i]
@@ -62,7 +72,7 @@ if __name__ == "__main__":
             model.update_pws_lr(optimizer)
             avg_loss += loss.item()
 
-            if (i == 0):
+            if (i == idx_show):
                 img.set_data(np.clip(image.detach().permute(
                     1, 2, 0).to('cpu').numpy(), 0, 1))
                 txt._text = "epoch %d" % epoch
